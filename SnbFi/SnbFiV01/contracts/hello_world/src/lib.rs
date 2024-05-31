@@ -58,7 +58,7 @@ pub trait SnbPoolTrait {
     fn initialize(e: Env,  user: Address, no_of_subs: u32, amount: u32, frequency: Frequency);
 
     //join the pool
-    fn join(e: Env);
+    fn join(e: Env, user: Address);
 
     //Set pool winner
     fn set_pool_winner(e: Env, iteration: u32, prize_amount: u32, subscriber: Address);
@@ -70,7 +70,7 @@ pub trait SnbPoolTrait {
     fn get_subscriber_details(e: Env, subscriber_address: Address) -> Subscriber;
 
     //start a new iteration
-    fn start_new_iteration(e: Env, iteration: u32 );
+    fn start_new_iteration(e: Env, iteration: u32, dummyAddress: Address);
 
 }
 
@@ -105,14 +105,12 @@ impl SnbPoolTrait for HelloContract {
 
     fn get_state(env: Env) -> State {
         //let mut sampleAddress = String::from("GCCVPYFOHY7ZB7557JKENAX62LUAPLMGIWNZJAFV2MITK6T32V37KEJU");
-        env.storage().instance().get(&STATE).unwrap(
-            panic!("State not found")
-        )
+        env.storage().instance().get(&STATE).unwrap()
     }
 
     fn initialize(e: Env, user: Address, no_of_subs: u32, amount: u32, frequency: Frequency) {
         //Check if the pool is already initialized
-        let mut initialized = e.storage().instance().get(&INTIALIZED);
+        let initialized = e.storage().instance().get(&INTIALIZED).unwrap_or_default();
         if initialized {
             panic!("Pool is already initialized");
         }
@@ -123,13 +121,9 @@ impl SnbPoolTrait for HelloContract {
             no_of_subs: no_of_subs,
             frequency: frequency,
             sub_amount: amount,
-            pool_owner: user
+            pool_owner: user.clone()
         };
         state.pool_params = pool_params;
-
-        //Save the pool_params in the storage
-        //e.storage().instance().set(&Self::pool_params{ no_of_subs: no_of_subs, frequency: frequency, sub_amount: amount, pool_owner: e.caller() });
-        
 
         //Add owner to the subscriber list
         let subscriber = Subscriber {
@@ -137,31 +131,36 @@ impl SnbPoolTrait for HelloContract {
             prev_due_amount: 0,
             prize_money: 0
         };
-        state.subscriber_map.insert(e.caller(), subscriber);
-        state.initialized = true;
+        state.subcriber_map.set(user.clone(), subscriber);
+    
         
         //save the state in the storage
-        e.storage().instance().set(&STATE, state);
+        e.storage().instance().set(&STATE, &state);
+        e.storage().instance().set(&INTIALIZED, &true);
     }
 
-    fn join(e: Env) {
+    fn join(e: Env, user: Address)  {
+        let mut state = Self::get_state(e.clone());
         // check if the subscriber is already in the pool. Only one address allowed in apool
-        if &Self::subscriber_map.contains_key(&e.caller()) {
+        if state.subcriber_map.contains_key(user.clone()) {
             panic!("Subscriber is already in the pool");
         }
-
+        user.require_auth();
         // Create Subscriber instance with default values
         let subscriber = Subscriber {
             winner_at_iter: 0,
-            prev_due_amount: 0
+            prev_due_amount: 0,
+            prize_money: 0
         };
-        //Save the subscriber in the subscriber_map
-        &Self::subscriber_map.insert(e.caller(), subscriber);
+        //Save the subscriber in the subcriber_map
+        state.subcriber_map.set(user, subscriber);
+        e.storage().instance().set(&STATE, &state);
     }
 
     fn set_pool_winner(e: Env, iteration: u32, prize_amount: u32, subscriber: Address) {
+        let mut state = Self::get_state(e.clone());
         // get the subscriber details for given address
-        let subr:Subscriber = &Self::subscriber_map.get(&subscriber).unwrap();
+        let mut subr:Subscriber = state.subcriber_map.get(subscriber.clone()).unwrap();
         // check if the subscriber is already marked as a winner
         if subr.winner_at_iter != 0 {
             panic!("Subscriber is already a winner");
@@ -170,50 +169,50 @@ impl SnbPoolTrait for HelloContract {
         subr.winner_at_iter = iteration;
         //set prize money for this subscriber
         subr.prize_money = prize_amount;
-        //save the subscriber in the subscriber_map
-        &Self::subscriber_map.insert(&subscriber, subr);
+        //save the subscriber in the subcriber_map
+        state.subcriber_map.set(subscriber.clone(), subr);
 
         // get the pool iteration details
-        let pool_iteration:PoolIterationParams = &Self::pool_iteration_map.get(&iteration);
+        let mut pool_iteration:PoolIterationParams = state.pool_iteration_map.get(iteration).unwrap();
         // set the winner for the given iteration
-        pool_iteration.winner = subscriber;
+        pool_iteration.winner = subscriber.clone();
         // set the prize money for the given iteration
         pool_iteration.prize_money = prize_amount;
         //set iteration to the pool iteration map
-        pool_iteration.dividend = pool_iteration.amount_collected - prize_amount;
-        &Self::pool_iteration_map.insert(&iteration, pool_iteration);
+        pool_iteration.dividend_amount = pool_iteration.amount_collected - prize_amount;
+        state.pool_iteration_map.set(iteration, pool_iteration);
 
-        //save subscriber map
-        //e.storage().instance().set(&SubscriberMap, val::subscriber_map);
-
-        //save the pool iteration in the storage
-        //e.storage().instance().set(&PoolIterationMap, val::pool_iteration_map);
+        //save the state in the storage
+        e.storage().instance().set(&STATE, &state);
     }
 
     fn get_pool_winner(e: Env, iteration: u32) -> Address {
+        let mut state = Self::get_state(e.clone());
         //return iteration winner
-        return  &Self::pool_iteration_map.get(&iteration).unwrap().winner
+        return  state.pool_iteration_map.get(iteration).unwrap().winner
     }
 
     fn get_subscriber_details(e: Env, subscriber_address: Address) -> Subscriber {
+        let mut state = Self::get_state(e.clone());
         //get subscriber details by address
-        return  &Self::subscriber_map.get(&subscriber_address).unwrap();
+        return  state.subcriber_map.get(subscriber_address).unwrap();
     }
 
     //start new iteration
-    fn start_new_iteration(e: Env, iteration: u32) {
+    fn start_new_iteration(e: Env, iteration: u32, dummyAddress: Address) {
+        let mut state = Self::get_state(e.clone());
         //create a new instance of PoolIterationParams
         let pool_iteration = PoolIterationParams {
             current_iteration: iteration,
             amount_collected: 0,
-            winner: Address::default(),
+            winner: dummyAddress.clone(),
             prize_money: 0,
             dividend_amount: 0
         };
         //save the pool iteration in the pool_iteration_map
-        &Self::pool_iteration_map.insert(iteration, pool_iteration);
+        state.pool_iteration_map.set(iteration, pool_iteration);
         //save the pool iteration map in the storage
-        //e.storage().instance().set(&PoolIterationMap, val::pool_iteration_map);
+        e.storage().instance().set(&STATE, &state);
     }
 }
 
